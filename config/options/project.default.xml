@@ -104,6 +104,15 @@
           <method />
         </configuration>
       </component>
+      <component name="SaveActionSettings">
+        <option name="actions">
+          <set>
+            <option value="activate" />
+            <option value="organizeImports" />
+            <option value="reformat" />
+          </set>
+        </option>
+      </component>
       <component name="masterDetails">
         <states>
           <state key="ProjectJDKs.UI">
