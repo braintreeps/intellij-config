@@ -1,3 +1,4 @@
+config/codestyles/Default.xml
 config/componentVersions/
 config/options/appComponentVersions.xml
 config/options/dimensions.xml
@@ -6,8 +7,9 @@ config/options/find.recents.xml
 config/options/options.xml
 config/options/proxy.settings.pwd
 config/options/recentProjects.xml
-config/options/statistics.application.usages.xml
+config/options/statistics.*.xml
 config/options/window.manager.xml
+config/options/window.state.xml
 config/plugins/availables.xml
 config/plugins/extensions.xml
 config/port
