@@ -4,7 +4,7 @@
       <component name="CompilerConfiguration">
         <option name="DEFAULT_COMPILER" />
       </component>
-      <component name="Encoding">
+      <component name="Encoding" addBOMForNewFiles="with NO BOM">
         <file url="PROJECT" charset="UTF-8" />
       </component>
       <component name="ProjectRootManager" version="2" languageLevel="JDK_1_6" />

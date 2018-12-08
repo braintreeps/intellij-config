@@ -28,6 +28,7 @@ DEPS = [
     "malloc",  # From cc_binary rules
     "_java_toolchain",  # From java rules
     "deps",
+    "jars",  # from java_import rules
     "exports",
     "java_lib",  # From old proto_library rules
     "_android_sdk",  # from android rules
@@ -192,13 +193,20 @@ def update_set_in_dict(input_dict, key, other_set):
 
 ##### Builders for individual parts of the aspect output
 
-def collect_py_info(target, ctx, ide_info, ide_info_file, output_groups):
+def collect_py_info(target, ctx, semantics, ide_info, ide_info_file, output_groups):
     """Updates Python-specific output groups, returns false if not a Python target."""
     if not hasattr(target, "py"):
         return False
 
+    py_semantics = getattr(semantics, "py", None)
+    if py_semantics:
+        py_launcher = py_semantics.get_launcher(ctx)
+    else:
+        py_launcher = None
+
     ide_info["py_ide_info"] = struct_omit_none(
         sources = sources_from_target(ctx),
+        launcher = py_launcher,
     )
     transitive_sources = target.py.transitive_sources
 
@@ -285,26 +293,19 @@ def collect_cpp_info(target, ctx, semantics, ide_info, ide_info_file, output_gro
     headers = artifacts_from_target_list_attr(ctx, "hdrs")
     textual_headers = artifacts_from_target_list_attr(ctx, "textual_hdrs")
 
-    target_includes = []
-    if hasattr(ctx.rule.attr, "includes"):
-        target_includes = ctx.rule.attr.includes
-    target_defines = []
-    if hasattr(ctx.rule.attr, "defines"):
-        target_defines = ctx.rule.attr.defines
     target_copts = []
     if hasattr(ctx.rule.attr, "copts"):
         target_copts += ctx.rule.attr.copts
     if hasattr(semantics, "cc") and hasattr(semantics.cc, "get_default_copts"):
         target_copts += semantics.cc.get_default_copts(ctx)
 
+    # Check cc_provider for 'includes' and 'defines' target attribute values.
     cc_provider = target.cc
 
     c_info = struct_omit_none(
         source = sources,
         header = headers,
         textual_header = textual_headers,
-        target_include = target_includes,
-        target_define = target_defines,
         target_copt = target_copts,
         transitive_include_directory = cc_provider.include_directories,
         transitive_quote_include_directory = cc_provider.quote_include_directories,
@@ -327,7 +328,16 @@ def collect_cpp_info(target, ctx, semantics, ide_info, ide_info_file, output_gro
 
 def collect_c_toolchain_info(target, ctx, semantics, ide_info, ide_info_file, output_groups):
     """Updates cc_toolchain-relevant output groups, returns false if not a cc_toolchain target."""
-    if ctx.rule.kind != "cc_toolchain" or cc_common.CcToolchainInfo not in target:
+
+    # The other toolchains like the JDK might also have ToolchainInfo but it's not a C++ toolchain,
+    # so check kind as well.
+    # TODO(jvoung): We are temporarily getting info from cc_toolchain_suite
+    # https://github.com/bazelbuild/bazel/commit/3aedb2f6de80630f88ffb6b60795c44e351a5810
+    # but will switch back to cc_toolchain providing CcToolchainProvider once we migrate C++ rules
+    # to generic platforms and toolchains.
+    if ctx.rule.kind != "cc_toolchain" and ctx.rule.kind != "cc_toolchain_suite":
+        return False
+    if cc_common.CcToolchainInfo not in target:
         return False
 
     # cc toolchain to access compiler flags
@@ -375,25 +385,16 @@ def collect_c_toolchain_info(target, ctx, semantics, ide_info, ide_info_file, ou
             action_name = "c++-compile",
             variables = cpp_variables,
         )
-        compiler_options = []
-        unfiltered_compiler_options = []
-    elif hasattr(cpp_toolchain, "unfiltered_compiler_options"):
-        cpp_options = cpp_toolchain.cxx_options()
-        compiler_options = cpp_toolchain.compiler_options()
-        c_options = cpp_toolchain.c_options()
-        unfiltered_compiler_options = cpp_toolchain.unfiltered_compiler_options([])
     else:
-        cpp_options = cpp_fragment.cxx_options(ctx.features)
-        c_options = cpp_fragment.c_options
-        compiler_options = cpp_fragment.compiler_options(ctx.features)
-        unfiltered_compiler_options = cpp_fragment.unfiltered_compiler_options(ctx.features)
+        # See the plugin's BazelVersionChecker. We should have checked that we are Bazel 0.16+,
+        # so get_memory_inefficient_command_line should be available.
+        c_options = []
+        cpp_options = []
 
     c_toolchain_info = struct_omit_none(
         target_name = cpp_toolchain.target_gnu_system_name,
-        base_compiler_option = compiler_options,
         c_option = c_options,
         cpp_option = cpp_options,
-        unfiltered_compiler_option = unfiltered_compiler_options,
         cpp_executable = str(cpp_toolchain.compiler_executable),
         built_in_include_directory = [str(d) for d in cpp_toolchain.built_in_include_directories],
     )
@@ -412,9 +413,9 @@ def get_java_provider(target):
     if hasattr(target, "kt") and hasattr(target.kt, "outputs"):
         return target.kt
 
-    # TODO(brendandouglas): use java_common.provider preferentially
-    if java_common.provider in target:
-        return target[java_common.provider]
+    # TODO(brendandouglas): use JavaInfo preferentially
+    if JavaInfo in target:
+        return target[JavaInfo]
     return None
 
 def collect_java_info(target, ctx, semantics, ide_info, ide_info_file, output_groups):
@@ -712,14 +713,17 @@ def intellij_info_aspect_impl(target, ctx, semantics):
 
     # Propagate my own exports
     export_deps = []
-    if hasattr(target, "java"):
-        transitive_exports = target.java.transitive_exports
+    if JavaInfo in target:
+        transitive_exports = target[JavaInfo].transitive_exports
         export_deps = [make_dep_from_label(label, COMPILE_TIME) for label in transitive_exports]
 
         # Empty android libraries export all their dependencies.
         if ctx.rule.kind == "android_library":
             if not hasattr(rule_attrs, "srcs") or not ctx.rule.attr.srcs:
                 export_deps = export_deps + compiletime_deps
+        elif ctx.rule.kind == "aar_import":
+            direct_exports = collect_targets_from_attrs(rule_attrs, ["exports"])
+            export_deps = export_deps + make_deps(direct_exports, COMPILE_TIME)
     export_deps = list(depset(export_deps))
 
     # runtime_deps
@@ -771,7 +775,7 @@ def intellij_info_aspect_impl(target, ctx, semantics):
     ide_info["test_info"] = build_test_info(ctx)
 
     handled = False
-    handled = collect_py_info(target, ctx, ide_info, ide_info_file, output_groups) or handled
+    handled = collect_py_info(target, ctx, semantics, ide_info, ide_info_file, output_groups) or handled
     handled = collect_cpp_info(target, ctx, semantics, ide_info, ide_info_file, output_groups) or handled
     handled = collect_c_toolchain_info(target, ctx, semantics, ide_info, ide_info_file, output_groups) or handled
     handled = collect_go_info(target, ctx, semantics, ide_info, ide_info_file, output_groups) or handled
