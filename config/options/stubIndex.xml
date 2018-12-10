@@ -2,19 +2,13 @@
   <component name="FileBasedIndex">
     <option name="registeredIndices">
       <list>
-        <option value="bash.function.name" />
-        <option value="sc.stable.alias.name" />
-        <option value="sc.implcit.object" />
+        <option value="sc.package.fqn" />
+        <option value="sc.package.object.short" />
+        <option value="sc.package.object.fqn" />
         <option value="sc.class.fqn" />
-        <option value="bash.included" />
-        <option value="sc.method.name" />
+        <option value="sc.not.visible.in.java.class.shortName" />
+        <option value="sc.class.shortName" />
         <option value="sc.all.class.names" />
-        <option value="sc.class.parameter.name" />
-        <option value="bash.script.name" />
-        <option value="sc.java.class.name.in.package" />
-        <option value="markdown.header" />
-        <option value="sc.type.alias.name" />
-        <option value="bash.vardef" />
         <option value="java.module.name" />
         <option value="java.class.fqn" />
         <option value="java.class.shortname" />
@@ -26,6 +20,7 @@
         <option value="java.field.name" />
         <option value="java.class.extlist" />
         <option value="java.annotations" />
+        <option value="markdown.header" />
         <option value="gr.anonymous.class" />
         <option value="gr.class.super" />
         <option value="gr.script.class" />
@@ -35,25 +30,31 @@
         <option value="gr.field.name" />
         <option value="gr.script.fqn" />
         <option value="gr.class.fqn" />
+        <option value="bash.var" />
+        <option value="bash.vardef" />
+        <option value="bash.scriptCommandReference" />
+        <option value="bash.includers" />
+        <option value="bash.included" />
+        <option value="bash.script.name" />
+        <option value="bash.function.name" />
         <option value="DataTypeName" />
         <option value="DataTypeFullName" />
         <option value="properties.index" />
         <option value="dom.elementClass" />
         <option value="dom.namespaceKey" />
-        <option value="sc.property.name" />
-        <option value="sc.package.object.fqn" />
-        <option value="bash.includers" />
-        <option value="sc.self.type.class.name.key" />
-        <option value="bash.var" />
-        <option value="sc.package.fqn" />
-        <option value="sc.annotatde.member.name" />
-        <option value="sc.package.object.short" />
-        <option value="sc.not.visible.in.java.class.shortName" />
         <option value="sc.implicit.function.name" />
-        <option value="sc.class.shortName" />
+        <option value="sc.self.type.class.name.key" />
         <option value="sc.super.class.name" />
-        <option value="bash.scriptCommandReference" />
+        <option value="sc.stable.alias.name" />
+        <option value="sc.type.alias.name" />
+        <option value="sc.class.parameter.name" />
+        <option value="sc.variable.name" />
+        <option value="sc.value.name" />
+        <option value="sc.annotatde.member.name" />
+        <option value="sc.implcit.object" />
+        <option value="sc.java.class.name.in.package" />
         <option value="sc.class.name.in.package" />
+        <option value="sc.method.name" />
       </list>
     </option>
   </component>
