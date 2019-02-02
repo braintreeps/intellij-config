@@ -6,6 +6,10 @@ load(
     "make_intellij_info_aspect",
 )
 
+EXTRA_DEPS = [
+    "embed",  # From go rules (bazel only)
+]
+
 def tool_label(tool_name):
     """Returns a label that points to a tool target in the bundled aspect workspace."""
     return Label("//:" + tool_name + "_bin")
@@ -27,10 +31,21 @@ def get_go_import_path(ctx):
         import_path += "/" + ctx.label.name
     return import_path
 
+def get_py_launcher(ctx):
+    """Returns the python launcher for a given rule."""
+    attr = ctx.rule.attr
+    if hasattr(attr, "_launcher") and attr._launcher != None:
+        return str(attr._launcher.label)
+    return None
+
 semantics = struct(
     tool_label = tool_label,
+    extra_deps = EXTRA_DEPS,
     go = struct(
         get_import_path = get_go_import_path,
+    ),
+    py = struct(
+        get_launcher = get_py_launcher,
     ),
 )
 
