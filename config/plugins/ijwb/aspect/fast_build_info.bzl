@@ -36,19 +36,26 @@ def _fast_build_info_impl(target, ctx):
     if hasattr(target, "java_toolchain"):
         write_output = True
         toolchain = target.java_toolchain
+        javac_jars = []
+        if hasattr(toolchain, "tools"):
+            javac_jars = [artifact_location(f) for f in toolchain.tools.to_list()]
         info["java_toolchain_info"] = struct_omit_none(
             javac_jar = artifact_location(toolchain.javac_jar),
+            javac_jars = javac_jars,
             source_version = toolchain.source_version,
             target_version = toolchain.target_version,
         )
     if JavaInfo in target:
         write_output = True
-        jvm_flags = getattr(ctx.rule.attr, "jvm_flags", [])
+        launcher = None
+        if hasattr(ctx.rule.attr, "_java_launcher") and ctx.rule.attr._java_launcher:
+            launcher = str(ctx.rule.attr._java_launcher.label)
         java_info = {
-            "jvm_flags": jvm_flags,
-            "test_size": getattr(ctx.rule.attr, "size", None),
             "sources": sources_from_target(ctx),
             "test_class": getattr(ctx.rule.attr, "test_class", None),
+            "test_size": getattr(ctx.rule.attr, "size", None),
+            "launcher": launcher,
+            "jvm_flags": getattr(ctx.rule.attr, "jvm_flags", []),
         }
         annotation_processing = target[JavaInfo].annotation_processing
         if annotation_processing:
