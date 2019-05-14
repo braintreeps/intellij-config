@@ -9,6 +9,10 @@ load(
     "struct_omit_none",
     "to_artifact_location",
 )
+load(
+    ":make_variables.bzl",
+    "expand_make_variables",
+)
 
 # Defensive list of features that can appear in the C++ toolchain, but which we
 # definitely don't want to enable (when enabled, they'd contribute command line
@@ -49,6 +53,50 @@ PREREQUISITE_DEPS = []
 # Dependency type enum
 COMPILE_TIME = 0
 RUNTIME = 1
+
+# PythonVersion enum; must match PyIdeInfo.PythonVersion
+PY2 = 1
+PY3 = 2
+
+##### Begin bazel-flag-hack
+# The flag hack stuff below is a way to detect flags that bazel has been invoked with from the
+# aspect. Once PY3-as-default is stable, it can be removed. When removing, also remove the
+# define_flag_hack() call in BUILD and the "_flag_hack" attr on the aspect below. See
+# "PY3-as-default" in:
+# https://github.com/bazelbuild/bazel/blob/master/src/main/java/com/google/devtools/build/lib/rules/python/PythonConfiguration.java
+
+FlagHackInfo = provider(fields = ["incompatible_py2_outputs_are_suffixed"])
+
+def _flag_hack_impl(ctx):
+    return [FlagHackInfo(incompatible_py2_outputs_are_suffixed = ctx.attr.incompatible_py2_outputs_are_suffixed)]
+
+_flag_hack_rule = rule(
+    implementation = _flag_hack_impl,
+    attrs = {"incompatible_py2_outputs_are_suffixed": attr.bool()},
+)
+
+def define_flag_hack():
+    native.config_setting(
+        name = "incompatible_py2_outputs_are_suffixed_setting",
+        values = {"incompatible_py2_outputs_are_suffixed": "true"},
+    )
+    _flag_hack_rule(
+        name = "flag_hack",
+        incompatible_py2_outputs_are_suffixed = select({
+            ":incompatible_py2_outputs_are_suffixed_setting": True,
+            "//conditions:default": False,
+        }),
+        visibility = ["//visibility:public"],
+    )
+
+##### End bazel-flag-hack
+
+# PythonCompatVersion enum; must match PyIdeInfo.PythonSrcsVersion
+SRC_PY2 = 1
+SRC_PY3 = 2
+SRC_PY2AND3 = 3
+SRC_PY2ONLY = 4
+SRC_PY3ONLY = 5
 
 ##### Helpers
 
@@ -193,13 +241,39 @@ def make_dep_from_label(label, dependency_type):
 
 def update_set_in_dict(input_dict, key, other_set):
     """Updates depset in dict, merging it with another depset."""
-    input_dict[key] = input_dict.get(key, depset()) | other_set
+    input_dict[key] = depset(transitive = [input_dict.get(key, depset()), other_set])
+
+def _get_output_mnemonic(ctx):
+    """Gives the output directory mnemonic for some target context."""
+    return ctx.configuration.bin_dir.path.split("/")[1]
+
+def _get_python_version(ctx):
+    if ctx.attr._flag_hack[FlagHackInfo].incompatible_py2_outputs_are_suffixed:
+        if _get_output_mnemonic(ctx).find("-py2-") != -1:
+            return PY2
+        return PY3
+    else:
+        if _get_output_mnemonic(ctx).find("-py3-") != -1:
+            return PY3
+        return PY2
+
+_SRCS_VERSION_MAPPING = {
+    "PY2": SRC_PY2,
+    "PY3": SRC_PY3,
+    "PY2AND3": SRC_PY2AND3,
+    "PY2ONLY": SRC_PY2ONLY,
+    "PY3ONLY": SRC_PY3ONLY,
+}
+
+def _get_python_srcs_version(ctx):
+    srcs_version = getattr(ctx.rule.attr, "srcs_version", default = "PY2AND3")
+    return _SRCS_VERSION_MAPPING.get(srcs_version, default = SRC_PY2AND3)
 
 ##### Builders for individual parts of the aspect output
 
 def collect_py_info(target, ctx, semantics, ide_info, ide_info_file, output_groups):
     """Updates Python-specific output groups, returns false if not a Python target."""
-    if not hasattr(target, "py") or _is_language_specific_proto_library(ctx, target):
+    if not PyInfo in target or _is_language_specific_proto_library(ctx, target):
         return False
 
     py_semantics = getattr(semantics, "py", None)
@@ -211,8 +285,10 @@ def collect_py_info(target, ctx, semantics, ide_info, ide_info_file, output_grou
     ide_info["py_ide_info"] = struct_omit_none(
         sources = sources_from_target(ctx),
         launcher = py_launcher,
+        python_version = _get_python_version(ctx),
+        srcs_version = _get_python_srcs_version(ctx),
     )
-    transitive_sources = target.py.transitive_sources
+    transitive_sources = target[PyInfo].transitive_sources
 
     update_set_in_dict(output_groups, "intellij-info-py", depset([ide_info_file]))
     update_set_in_dict(output_groups, "intellij-compile-py", transitive_sources)
@@ -284,10 +360,8 @@ def collect_go_info(target, ctx, semantics, ide_info, ide_info_file, output_grou
         library_kind = library_kind,
     )
 
-    # TODO(brendandouglas): remove once enough Bazel users are on a version with the changed name
-    old_compile_files = target.output_group("files_to_compile_INTERNAL_")
-    compile_files = target.output_group("compilation_outputs")
-    compile_files = depset(generated, transitive = [compile_files, old_compile_files])
+    compile_files = target[OutputGroupInfo].compilation_outputs if hasattr(target[OutputGroupInfo], "compilation_outputs") else depset([])
+    compile_files = depset(generated, transitive = [compile_files])
 
     update_set_in_dict(output_groups, "intellij-info-go", depset([ide_info_file]))
     update_set_in_dict(output_groups, "intellij-compile-go", compile_files)
@@ -296,7 +370,12 @@ def collect_go_info(target, ctx, semantics, ide_info, ide_info_file, output_grou
 
 def collect_cpp_info(target, ctx, semantics, ide_info, ide_info_file, output_groups):
     """Updates C++-specific output groups, returns false if not a C++ target."""
-    if not hasattr(target, "cc") or _is_language_specific_proto_library(ctx, target):
+
+    if CcInfo not in target or _is_language_specific_proto_library(ctx, target):
+        return False
+
+    # Go targets always provide CcInfo. Usually it's empty, but even if it isn't we don't handle it
+    if ctx.rule.kind.startswith("go_"):
         return False
 
     sources = artifacts_from_target_list_attr(ctx, "srcs")
@@ -309,27 +388,25 @@ def collect_cpp_info(target, ctx, semantics, ide_info, ide_info_file, output_gro
     if hasattr(semantics, "cc") and hasattr(semantics.cc, "get_default_copts"):
         target_copts += semantics.cc.get_default_copts(ctx)
 
-    # Check cc_provider for 'includes' and 'defines' target attribute values.
-    cc_provider = target.cc
+    target_copts = [expand_make_variables("copt", copt, ctx) for copt in target_copts]
+
+    compilation_context = target[CcInfo].compilation_context
 
     c_info = struct_omit_none(
         source = sources,
         header = headers,
         textual_header = textual_headers,
         target_copt = target_copts,
-        transitive_include_directory = cc_provider.include_directories,
-        transitive_quote_include_directory = cc_provider.quote_include_directories,
-        transitive_define = cc_provider.defines,
-        transitive_system_include_directory = cc_provider.system_include_directories,
+        transitive_include_directory = compilation_context.includes.to_list(),
+        transitive_quote_include_directory = compilation_context.quote_includes.to_list(),
+        transitive_define = compilation_context.defines.to_list(),
+        transitive_system_include_directory = compilation_context.system_includes.to_list(),
     )
     ide_info["c_ide_info"] = c_info
-    resolve_files = cc_provider.transitive_headers
+    resolve_files = compilation_context.headers
 
     # TODO(brendandouglas): target to cpp files only
-    # TODO(brendandouglas): remove once enough Bazel users are on a version with the changed name
-    old_compile_files = target.output_group("files_to_compile_INTERNAL_")
-    compile_files = target.output_group("compilation_outputs")
-    compile_files = depset(transitive = [compile_files, old_compile_files])
+    compile_files = target[OutputGroupInfo].compilation_outputs if hasattr(target[OutputGroupInfo], "compilation_outputs") else depset([])
 
     update_set_in_dict(output_groups, "intellij-info-cpp", depset([ide_info_file]))
     update_set_in_dict(output_groups, "intellij-compile-cpp", compile_files)
@@ -436,37 +513,42 @@ def collect_java_info(target, ctx, semantics, ide_info, ide_info_file, output_gr
     if java_semantics and java_semantics.skip_target(target, ctx):
         return False
 
-    ide_info_files = depset()
+    ide_info_files = []
     sources = sources_from_target(ctx)
     jars = [library_artifact(output) for output in java.outputs.jars]
     class_jars = [output.class_jar for output in java.outputs.jars if output and output.class_jar]
     output_jars = [jar for output in java.outputs.jars for jar in jars_from_output(output)]
-    resolve_files = depset(output_jars)
-    compile_files = depset(class_jars)
+    resolve_files = output_jars
+    compile_files = class_jars
 
     gen_jars = []
     if (hasattr(java, "annotation_processing") and
         java.annotation_processing and
         java.annotation_processing.enabled):
         gen_jars = [annotation_processing_jars(java.annotation_processing)]
-        resolve_files = resolve_files | depset([
+        resolve_files += [
             jar
             for jar in [
                 java.annotation_processing.class_jar,
                 java.annotation_processing.source_jar,
             ]
             if jar != None and not jar.is_source
-        ])
-        compile_files = compile_files | depset([
+        ]
+        compile_files += [
             jar
             for jar in [java.annotation_processing.class_jar]
             if jar != None and not jar.is_source
-        ])
+        ]
 
     jdeps = None
-    if hasattr(java.outputs, "jdeps") and java.outputs.jdeps:
-        jdeps = artifact_location(java.outputs.jdeps)
-        resolve_files = depset([java.outputs.jdeps], transitive = [resolve_files])
+    jdeps_file = None
+    if java_semantics and hasattr(java_semantics, "get_filtered_jdeps"):
+        jdeps_file = java_semantics.get_filtered_jdeps(target)
+    if jdeps_file == None and hasattr(java.outputs, "jdeps") and java.outputs.jdeps:
+        jdeps_file = java.outputs.jdeps
+    if jdeps_file:
+        jdeps = artifact_location(jdeps_file)
+        resolve_files.append(jdeps_file)
 
     java_sources, gen_java_sources, srcjars = divide_java_sources(ctx)
 
@@ -476,7 +558,7 @@ def collect_java_info(target, ctx, semantics, ide_info, ide_info_file, output_gr
     package_manifest = None
     if java_sources:
         package_manifest = build_java_package_manifest(ctx, target, java_sources, ".java-manifest")
-        ide_info_files = ide_info_files | depset([package_manifest])
+        ide_info_files += [package_manifest]
 
     filtered_gen_jar = None
     if java_sources and (gen_java_sources or srcjars):
@@ -487,7 +569,7 @@ def collect_java_info(target, ctx, semantics, ide_info, ide_info_file, output_gr
             gen_java_sources,
             srcjars,
         )
-        resolve_files = resolve_files | filtered_gen_resolve_files
+        resolve_files += filtered_gen_resolve_files
 
     java_info = struct_omit_none(
         sources = sources,
@@ -501,10 +583,10 @@ def collect_java_info(target, ctx, semantics, ide_info, ide_info_file, output_gr
     )
 
     ide_info["java_ide_info"] = java_info
-    ide_info_files += depset([ide_info_file])
-    update_set_in_dict(output_groups, "intellij-info-java", ide_info_files)
-    update_set_in_dict(output_groups, "intellij-compile-java", compile_files)
-    update_set_in_dict(output_groups, "intellij-resolve-java", resolve_files)
+    ide_info_files += [ide_info_file]
+    update_set_in_dict(output_groups, "intellij-info-java", depset(ide_info_files))
+    update_set_in_dict(output_groups, "intellij-compile-java", depset(compile_files))
+    update_set_in_dict(output_groups, "intellij-resolve-java", depset(resolve_files))
     return True
 
 def _package_manifest_file_argument(f):
@@ -514,23 +596,25 @@ def _package_manifest_file_argument(f):
 
 def build_java_package_manifest(ctx, target, source_files, suffix):
     """Builds the java package manifest for the given source files."""
-    output = ctx.new_file(target.label.name + suffix)
+    output = ctx.actions.declare_file(target.label.name + suffix)
 
-    args = []
-    args += ["--output_manifest", output.path]
-    args += ["--sources"]
-    args += [":".join([_package_manifest_file_argument(f) for f in source_files])]
-    argfile = ctx.new_file(
-        ctx.configuration.bin_dir,
-        target.label.name + suffix + ".params",
+    args = ctx.actions.args()
+    args.add("--output_manifest")
+    args.add(output.path)
+    args.add_joined(
+        "--sources",
+        source_files,
+        join_with = ":",
+        map_each = _package_manifest_file_argument,
     )
-    ctx.file_action(output = argfile, content = "\n".join(args))
+    args.use_param_file("@%s")
+    args.set_param_file_format("multiline")
 
-    ctx.action(
-        inputs = source_files + [argfile],
+    ctx.actions.run(
+        inputs = source_files,
         outputs = [output],
         executable = ctx.executable._package_parser,
-        arguments = ["@" + argfile.path],
+        arguments = [args],
         mnemonic = "JavaPackageManifest",
         progress_message = "Parsing java package strings for " + str(target.label),
     )
@@ -550,8 +634,8 @@ def build_filtered_gen_jar(ctx, target, java, gen_java_sources, srcjars):
         elif hasattr(jar, "source_jar") and jar.source_jar:
             source_jar_artifacts.append(jar.source_jar)
 
-    filtered_jar = ctx.new_file(target.label.name + "-filtered-gen.jar")
-    filtered_source_jar = ctx.new_file(target.label.name + "-filtered-gen-src.jar")
+    filtered_jar = ctx.actions.declare_file(target.label.name + "-filtered-gen.jar")
+    filtered_source_jar = ctx.actions.declare_file(target.label.name + "-filtered-gen-src.jar")
     args = []
     for jar in jar_artifacts:
         args += ["--filter_jar", jar.path]
@@ -565,7 +649,7 @@ def build_filtered_gen_jar(ctx, target, java, gen_java_sources, srcjars):
     if srcjars:
         for source_jar in srcjars:
             args += ["--keep_source_jar", source_jar.path]
-    ctx.action(
+    ctx.actions.run(
         inputs = jar_artifacts + source_jar_artifacts + gen_java_sources + srcjars,
         outputs = [filtered_jar, filtered_source_jar],
         executable = ctx.executable._jar_filter,
@@ -577,7 +661,7 @@ def build_filtered_gen_jar(ctx, target, java, gen_java_sources, srcjars):
         jar = artifact_location(filtered_jar),
         source_jar = artifact_location(filtered_source_jar),
     )
-    intellij_resolve_files = depset([filtered_jar, filtered_source_jar])
+    intellij_resolve_files = [filtered_jar, filtered_source_jar]
     return output_jar, intellij_resolve_files
 
 def divide_java_sources(ctx):
@@ -634,14 +718,14 @@ def collect_android_info(target, ctx, semantics, ide_info, ide_info_file, output
         resource_jar = library_artifact(android.resource_jar),
         **extra_ide_info
     )
-    resolve_files = depset(jars_from_output(android.idl.output))
+    resolve_files = jars_from_output(android.idl.output)
 
     if android.manifest and not android.manifest.is_source:
-        resolve_files = resolve_files | depset([android.manifest])
+        resolve_files += [android.manifest]
 
     ide_info["android_ide_info"] = android_info
     update_set_in_dict(output_groups, "intellij-info-android", depset([ide_info_file]))
-    update_set_in_dict(output_groups, "intellij-resolve-android", resolve_files)
+    update_set_in_dict(output_groups, "intellij-resolve-android", depset(resolve_files))
     return True
 
 def collect_android_sdk_info(ctx, ide_info, ide_info_file, output_groups):
@@ -684,12 +768,16 @@ def collect_java_toolchain_info(target, ide_info, ide_info_file, output_groups):
     """Updates java_toolchain-relevant output groups, returns false if not a java_toolchain target."""
     if not hasattr(target, "java_toolchain"):
         return False
-    toolchain_info = target.java_toolchain
-    javac_jar_file = toolchain_info.javac_jar if hasattr(toolchain_info, "javac_jar") else None
+    toolchain = target.java_toolchain
+    javac_jar_file = toolchain.javac_jar if hasattr(toolchain, "javac_jar") else None
+    javac_jars = []
+    if hasattr(toolchain, "tools"):
+        javac_jars = [artifact_location(f) for f in toolchain.tools.to_list()]
     ide_info["java_toolchain_ide_info"] = struct_omit_none(
-        source_version = toolchain_info.source_version,
-        target_version = toolchain_info.target_version,
+        source_version = toolchain.source_version,
+        target_version = toolchain.target_version,
         javac_jar = artifact_location(javac_jar_file),
+        javac_jars = javac_jars,
     )
     update_set_in_dict(output_groups, "intellij-info-java", depset([ide_info_file]))
     return True
@@ -767,7 +855,7 @@ def intellij_info_aspect_impl(target, ctx, semantics):
         aspect_hash = hash(".".join(aspect_ids))
         file_name = file_name + "-" + str(aspect_hash)
     file_name = file_name + ".intellij-info.txt"
-    ide_info_file = ctx.new_file(file_name)
+    ide_info_file = ctx.actions.declare_file(file_name)
 
     target_key = make_target_key(target.label, aspect_ids)
     ide_info = dict(
@@ -803,7 +891,7 @@ def intellij_info_aspect_impl(target, ctx, semantics):
 
     # Output the ide information file.
     info = struct_omit_none(**ide_info)
-    ctx.file_action(ide_info_file, info.to_proto())
+    ctx.actions.write(ide_info_file, info.to_proto())
 
     # Return providers.
     return struct_omit_none(
@@ -825,27 +913,33 @@ def semantics_extra_deps(base, semantics, name):
 def make_intellij_info_aspect(aspect_impl, semantics):
     """Creates the aspect given the semantics."""
     tool_label = semantics.tool_label
+    flag_hack_label = semantics.flag_hack_label
     deps = semantics_extra_deps(DEPS, semantics, "extra_deps")
     runtime_deps = semantics_extra_deps(RUNTIME_DEPS, semantics, "extra_runtime_deps")
     prerequisite_deps = semantics_extra_deps(PREREQUISITE_DEPS, semantics, "extra_prerequisites")
 
     attr_aspects = deps + runtime_deps + prerequisite_deps
 
+    attrs = {
+        "_package_parser": attr.label(
+            default = tool_label("PackageParser"),
+            cfg = "host",
+            executable = True,
+            allow_files = True,
+        ),
+        "_jar_filter": attr.label(
+            default = tool_label("JarFilter"),
+            cfg = "host",
+            executable = True,
+            allow_files = True,
+        ),
+        "_flag_hack": attr.label(
+            default = flag_hack_label,
+        ),
+    }
+
     return aspect(
-        attrs = {
-            "_package_parser": attr.label(
-                default = tool_label("PackageParser"),
-                cfg = "host",
-                executable = True,
-                allow_files = True,
-            ),
-            "_jar_filter": attr.label(
-                default = tool_label("JarFilter"),
-                cfg = "host",
-                executable = True,
-                allow_files = True,
-            ),
-        },
+        attrs = attrs,
         attr_aspects = attr_aspects,
         fragments = ["cpp"],
         implementation = aspect_impl,
