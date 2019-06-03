@@ -282,17 +282,24 @@ def collect_py_info(target, ctx, semantics, ide_info, ide_info_file, output_grou
     else:
         py_launcher = None
 
+    sources = sources_from_target(ctx)
+    to_build = target[PyInfo].transitive_sources
+    if ctx.rule.kind == "py_wrap_cc":
+        # track the generated .py output
+        py_genfiles = [f for f in target.files.to_list() if f.basename.endswith(".py")]
+        sources = [artifact_location(f) for f in py_genfiles]
+        to_build += py_genfiles
+
     ide_info["py_ide_info"] = struct_omit_none(
-        sources = sources_from_target(ctx),
+        sources = sources,
         launcher = py_launcher,
         python_version = _get_python_version(ctx),
         srcs_version = _get_python_srcs_version(ctx),
     )
-    transitive_sources = target[PyInfo].transitive_sources
 
     update_set_in_dict(output_groups, "intellij-info-py", depset([ide_info_file]))
-    update_set_in_dict(output_groups, "intellij-compile-py", transitive_sources)
-    update_set_in_dict(output_groups, "intellij-resolve-py", transitive_sources)
+    update_set_in_dict(output_groups, "intellij-compile-py", to_build)
+    update_set_in_dict(output_groups, "intellij-resolve-py", to_build)
     return True
 
 def _collect_generated_proto_go_sources(target):
@@ -320,44 +327,42 @@ def collect_go_info(target, ctx, semantics, ide_info, ide_info_file, output_grou
         "go_appengine_library",
         "go_appengine_test",
     ]:
-        sources += [f for src in getattr(ctx.rule.attr, "srcs", []) for f in src.files]
-        generated += [f for f in sources if not f.is_source]
+        sources = [f for src in getattr(ctx.rule.attr, "srcs", []) for f in src.files]
+        generated = [f for f in sources if not f.is_source]
     elif ctx.rule.kind == "go_wrap_cc":
-        # we want the .go file, but the rule only provides .a and .x files
-        # add those to the output group to make sure the .go file gets built,
-        # then manually construct the .go file in the sync plugin
-        # TODO(chaorenl): change this if we ever get the .go file from a provider
-        generated += target.files.to_list()
+        genfiles = target.files.to_list()
+        go_genfiles = [f for f in genfiles if f.basename.endswith(".go")]
+        if go_genfiles:
+            sources = go_genfiles
+            generated = go_genfiles
+        else:
+            # if the .go file isn't in 'files', build the .a and .x files instead
+            generated = genfiles
     else:
         proto_sources = _collect_generated_proto_go_sources(target)
         if not proto_sources:
             return False
-        sources += proto_sources
-        generated += proto_sources
+        sources = proto_sources
+        generated = proto_sources
 
     import_path = None
     go_semantics = getattr(semantics, "go", None)
     if go_semantics:
         import_path = go_semantics.get_import_path(ctx)
 
-    # TODO(chaorenl): remove library_kind, default library_label to None instead of target label
-    # after corresponding plugin change is live
-    library_label = str(target.label)
-    library_kind = ctx.rule.kind
-    if ((ctx.rule.kind == "go_test" or ctx.rule.kind == "go_appengine_test") and
-        getattr(ctx.rule.attr, "library", None) != None):
-        library = ctx.rule.attr.library
-        library_label = str(library.label)
-        if hasattr(library, "intellij_info"):
-            library_kind = library.intellij_info.kind
-        else:
-            library_kind = "go_library"
+    library_labels = []
+    if ctx.rule.kind == "go_test" or ctx.rule.kind == "go_appengine_test":
+        if getattr(ctx.rule.attr, "library", None) != None:
+            library_labels = [str(ctx.rule.attr.library.label)]
+        elif getattr(ctx.rule.attr, "embed", None) != None:
+            library_labels = [str(library.label) for library in ctx.rule.attr.embed]
 
     ide_info["go_ide_info"] = struct_omit_none(
         sources = [artifact_location(f) for f in sources],
         import_path = import_path,
-        library_label = library_label,
-        library_kind = library_kind,
+        # TODO(chaorenl): deprecated, remove after plugin update
+        library_label = library_labels[0] if library_labels else None,
+        library_labels = library_labels,
     )
 
     compile_files = target[OutputGroupInfo].compilation_outputs if hasattr(target[OutputGroupInfo], "compilation_outputs") else depset([])
@@ -445,6 +450,7 @@ def collect_c_toolchain_info(target, ctx, semantics, ide_info, ide_info_file, ou
             cxxopts = []
             conlyopts = []
         feature_configuration = cc_common.configure_features(
+            ctx = ctx,
             cc_toolchain = cpp_toolchain,
             requested_features = ctx.features,
             unsupported_features = ctx.disabled_features + UNSUPPORTED_FEATURES,
@@ -786,6 +792,7 @@ def collect_java_toolchain_info(target, ide_info, ide_info_file, output_groups):
 
 def intellij_info_aspect_impl(target, ctx, semantics):
     """Aspect implementation function."""
+
     tags = ctx.rule.attr.tags
     if "no-ide" in tags:
         return struct()
