@@ -1,1 +1,2 @@
+org.intellij.scala
 org.jetbrains.kotlin
