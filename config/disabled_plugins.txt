@@ -1,2 +1,3 @@
 org.intellij.scala
+org.jetbrains.android
 org.jetbrains.kotlin

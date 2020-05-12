@@ -29,18 +29,23 @@ def _fast_build_info_impl(target, ctx):
         info["data"] = [
             struct(
                 label = str(datadep.label),
-                artifacts = [artifact_location(file) for file in datadep.files],
+                artifacts = [artifact_location(file) for file in datadep.files.to_list()],
             )
             for datadep in ctx.rule.attr.data
         ]
+
     if hasattr(target, "java_toolchain"):
         write_output = True
         toolchain = target.java_toolchain
         javac_jars = []
         if hasattr(toolchain, "tools"):
             javac_jars = [artifact_location(f) for f in toolchain.tools.to_list()]
+        bootclasspath_jars = []
+        if hasattr(toolchain, "bootclasspath"):
+            bootclasspath_jars = [artifact_location(f) for f in toolchain.bootclasspath.to_list()]
         info["java_toolchain_info"] = struct_omit_none(
             javac_jars = javac_jars,
+            bootclasspath_jars = bootclasspath_jars,
             source_version = toolchain.source_version,
             target_version = toolchain.target_version,
         )
@@ -54,6 +59,7 @@ def _fast_build_info_impl(target, ctx):
             "test_class": getattr(ctx.rule.attr, "test_class", None),
             "test_size": getattr(ctx.rule.attr, "size", None),
             "launcher": launcher,
+            "swigdeps": getattr(ctx.rule.attr, "swigdeps", True),
             "jvm_flags": getattr(ctx.rule.attr, "jvm_flags", []),
         }
         annotation_processing = target[JavaInfo].annotation_processing
@@ -93,7 +99,7 @@ def _get_all_dep_targets(target, ctx):
     """Get all the targets mentioned in one of the _DEP_ATTRS attributes of the target"""
     targets = []
     for attr_name in _DEP_ATTRS:
-        attr_val = getattr(ctx.rule.attr, attr_name, default = None)
+        attr_val = getattr(ctx.rule.attr, attr_name, None)
         if not attr_val:
             continue
         attr_type = type(attr_val)

@@ -1,10 +1,5 @@
 """An aspect which extracts the runtime classpath from a java target."""
 
-load(
-    ":artifacts.bzl",
-    "artifact_location",
-)
-
 def _runtime_classpath_impl(target, ctx):
     """The top level aspect implementation function.
 
@@ -23,12 +18,15 @@ def _runtime_classpath_impl(target, ctx):
     })
 
 def _get_runtime_jars(target):
-    if hasattr(target, "java"):
-        return target.java.compilation_info.runtime_classpath
-    if java_common.provider in target:
-        java_provider = target[java_common.provider]
-        return java_provider.transitive_runtime_jars
-    return depset()
+    if JavaInfo not in target:
+        return depset()
+    if target[JavaInfo].compilation_info:
+        return target[JavaInfo].compilation_info.runtime_classpath
+
+    # JavaInfo constructor doesn't fill in compilation info, so just return the
+    # full transitive set of runtime jars
+    # https://github.com/bazelbuild/bazel/issues/10170
+    return target[JavaInfo].transitive_runtime_jars
 
 def _aspect_def(impl):
     return aspect(implementation = impl)
