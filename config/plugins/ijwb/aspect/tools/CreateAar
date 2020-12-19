@@ -245,7 +245,7 @@ else
   # Create the shortest classpath we can, by making it relative if possible.
   RUNPATH="${JAVA_RUNFILES}/intellij_with_bazel/"
   RUNPATH="${RUNPATH#$PWD/}"
-  CLASSPATH="${RUNPATH}aspect/tools/liblib.jar:${RUNPATH}../intellij_ue_2020_2/lib/failureaccess-1.0.1.jar:${RUNPATH}../intellij_ue_2020_2/lib/guava-29.0-jre.jar:${RUNPATH}../jsr305_annotations/jsr305-3.0.2.jar:${RUNPATH}proto/repackaged_proto_deps.jar"
+  CLASSPATH="${RUNPATH}aspect/tools/liblib.jar:${RUNPATH}../intellij_ce_2020_2/lib/failureaccess-1.0.1.jar:${RUNPATH}../intellij_ce_2020_2/lib/guava-29.0-jre.jar:${RUNPATH}proto/repackaged_proto_deps.jar"
 fi
 
 # Export the locations which will be used to find the location of the classes from the classpath file.
