@@ -1,9 +1,0 @@
-<application>
-  <component name="BlazeUserSettings">
-    <option name="bazelBinaryPath" value="./bazel" />
-    <option name="showBlazeConsoleOnRun" value="On error" />
-    <option name="showBlazeConsoleOnSync" value="On error" />
-    <option name="showProblemsViewOnRun" value="On error" />
-    <option name="showProblemsViewOnSync" value="On error" />
-  </component>
-</application>
