@@ -1602,6 +1602,12 @@
               <option name="myBundled" value="false" />
               <option name="myFromCustomRepository" value="false" />
             </plugin>
+            <plugin>
+              <option name="myPluginId" value="net.sf.opk.avro-schema-support" />
+              <option name="myPluginName" />
+              <option name="myBundled" value="false" />
+              <option name="myFromCustomRepository" value="false" />
+            </plugin>
           </set>
         </option>
       </plugins>
